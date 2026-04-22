@@ -6,13 +6,21 @@ from datetime import datetime
 # CONFIG
 # =========================
 
-st.set_page_config(page_title="KiteNow Intelligence", layout="centered")
+st.set_page_config(page_title="Kite Intelligence - Noorderpier", layout="centered")
 
 LAT = 52.01
 LON = 4.12
 
 # =========================
-# FETCH FORECAST (OPEN-METEO)
+# CONVERSIONS
+# =========================
+
+def kmh_to_knots(kmh):
+    return kmh * 0.539957
+
+
+# =========================
+# FETCH FORECAST
 # =========================
 
 def get_forecast():
@@ -32,100 +40,131 @@ def get_forecast():
 
 
 # =========================
-# GUST FACTOR (SAFETY)
+# GUST FACTOR
 # =========================
 
 def gust_factor(speed, gust):
-    if speed is None or gust is None or speed == 0:
+    if speed == 0 or speed is None:
         return 0
+    return gust / speed
 
-    return gust / speed  # ratio
 
-
-def gust_risk_label(gf):
+def gust_label(gf):
     if gf < 1.2:
-        return "🟢 Stable"
+        return "🟢 Clean"
     elif gf < 1.5:
         return "🟠 Gusty"
-    else:
-        return "🔴 Dangerous"
+    return "🔴 Dangerous"
 
 
 # =========================
-# WIND TREND
+# SIMPLE "TIDE PROXY"
+# (Noorderpier weighting)
 # =========================
 
-def wind_trend(speeds):
-    if len(speeds) < 3:
-        return "⚪ Unknown"
-
-    recent = speeds[-3:]
-
-    if recent[-1] > recent[0] + 1:
-        return "📈 Increasing"
-    elif recent[-1] < recent[0] - 1:
-        return "📉 Decreasing"
-    else:
-        return "➡ Stable"
+def tide_score(hour_index):
+    # rough heuristic:
+    # morning + late afternoon = better flow near Noordpier
+    if 6 <= hour_index <= 10:
+        return 2
+    elif 16 <= hour_index <= 20:
+        return 2
+    return 1
 
 
 # =========================
 # BEST 2-HOUR WINDOW
 # =========================
 
-def find_best_window(hourly):
+def best_window(hourly):
     speeds = hourly["windspeed_10m"]
+    gusts = hourly["windgusts_10m"]
 
-    best_score = 0
+    best_score = -999
     best_start = 0
 
-    # 2-hour sliding window
     for i in range(len(speeds) - 2):
-        window = speeds[i:i+2]
 
-        avg = sum(window) / 2
+        s1 = kmh_to_knots(speeds[i])
+        s2 = kmh_to_knots(speeds[i + 1])
 
-        # scoring function (simple but effective)
+        g1 = kmh_to_knots(gusts[i])
+        g2 = kmh_to_knots(gusts[i + 1])
+
+        avg_speed = (s1 + s2) / 2
+        avg_gust = (g1 + g2) / 2
+
+        gf = gust_factor(avg_speed, avg_gust)
+
         score = 0
-        if 6 <= avg <= 14:
-            score += avg
-        if min(window) > 5:
+
+        # wind quality
+        if 12 <= avg_speed <= 25:
+            score += 5
+        elif avg_speed > 25:
             score += 3
+        else:
+            score += 1
+
+        # stability
+        if gf < 1.3:
+            score += 4
+        elif gf < 1.6:
+            score += 2
+        else:
+            score -= 2
+
+        # tide proxy
+        score += tide_score(i)
 
         if score > best_score:
             best_score = score
             best_start = i
 
-    return best_start
+    return best_start, best_score
 
 
 # =========================
-# CURRENT DATA
+# WIND TREND
+# =========================
+
+def trend(values):
+    v = values[:5]
+    if v[-1] > v[0] + 2:
+        return "📈 Building"
+    elif v[-1] < v[0] - 2:
+        return "📉 Dropping"
+    return "➡ Stable"
+
+
+# =========================
+# DATA
 # =========================
 
 hourly = get_forecast()
 
-speeds = hourly["windspeed_10m"]
-dirs = hourly["winddirection_10m"]
-gusts = hourly["windgusts_10m"]
-times = hourly["time"]
+wind = hourly["windspeed_10m"]
+dir = hourly["winddirection_10m"]
+gust = hourly["windgusts_10m"]
+time = hourly["time"]
 
-current_speed = speeds[0] / 3.6
-current_dir = dirs[0]
-current_gust = gusts[0] / 3.6
+# CURRENT (knots)
+current_speed = kmh_to_knots(wind[0])
+current_gust = kmh_to_knots(gust[0])
+current_dir = dir[0]
 
 gf = gust_factor(current_speed, current_gust)
 
-trend = wind_trend([s / 3.6 for s in speeds[:6]])
+t = trend([kmh_to_knots(x) for x in wind])
 
-best_start = find_best_window(hourly)
+best_start, best_score = best_window(hourly)
 
 # =========================
-# UI HEADER
+# UI
 # =========================
 
-st.title("🏄 KiteNow Intelligence")
-st.caption("Wind + gust safety + session prediction")
+st.title("🏄 Kite Intelligence – Noorderpier")
+st.caption("Wind + gust + tide proxy + session optimizer")
 
 # =========================
 # CURRENT CONDITIONS
@@ -134,38 +173,44 @@ st.caption("Wind + gust safety + session prediction")
 st.markdown(
     f"""
     <div style="text-align:center;">
-        <h1>💨 {current_speed:.1f} m/s</h1>
+        <h1>💨 {current_speed:.1f} kn</h1>
         <h2>🧭 {current_dir:.0f}°</h2>
-        <h3>{gust_risk_label(gf)} (GF {gf:.2f})</h3>
-        <h3>{trend}</h3>
+        <h3>🌬 Gust: {current_gust:.1f} kn</h3>
+        <h3>{gust_label(gf)} (GF {gf:.2f})</h3>
+        <h3>{t}</h3>
     </div>
     """,
     unsafe_allow_html=True
 )
 
 # =========================
-# BEST WINDOW
+# BEST WINDOW OUTPUT
 # =========================
 
-st.subheader("🌊 Best 2-hour kite window")
+start_time = time[best_start]
+end_time = time[best_start + 2]
 
-start_time = times[best_start]
-end_time = times[best_start + 2]
+st.subheader("🌊 Best 2-hour kite window (Noorderpier optimized)")
 
-st.success(
-    f"Best window: {start_time} → {end_time}"
-)
+st.success(f"""
+🟢 BEST WINDOW:  
+{start_time} → {end_time}  
+
+🔥 Score: {best_score:.1f}
+""")
 
 # =========================
-# SIMPLE INSIGHT ENGINE
+# SAFETY INSIGHT
 # =========================
 
-if gf > 1.5:
-    st.error("⚠️ High gust variability — risky for beginners")
-elif current_speed > 8 and 0.8 < gf < 1.4:
-    st.success("🔥 Ideal kite conditions NOW")
+if gf > 1.6:
+    st.error("⚠️ Very gusty — risky conditions")
+elif current_speed > 18 and gf < 1.3:
+    st.success("🔥 PERFECT KITE CONDITIONS NOW")
+elif current_speed < 10:
+    st.info("🌤 Underpowered — wait for wind")
 else:
-    st.info("🌤 Wait or monitor conditions")
+    st.warning("🟡 Rideable but not optimal")
 
 # =========================
 # REFRESH
