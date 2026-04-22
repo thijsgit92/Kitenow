@@ -15,34 +15,27 @@ placeholder = st.empty()
 # =========================
 # SAFE DATA FUNCTION
 # =========================
-def fetch_single(code):
-    try:
-        payload = {
-            "Locatie": {"Code": STATION_CODE},
-            "AquoPlusWaarnemingMetadata": {
-                "AquoMetadata": {
-                    "Grootheid": {"Code": code}
-                }
+
+def debug_fetch(code):
+    payload = {
+        "Locatie": {"Code": STATION_CODE},
+        "AquoPlusWaarnemingMetadata": {
+            "AquoMetadata": {
+                "Grootheid": {"Code": code}
             }
         }
+    }
 
-        r = requests.post(API_URL, json=payload, timeout=10)
+    r = requests.post(API_URL, json=payload, timeout=10)
 
-        if r.status_code != 200:
-            return None
-
-        data = r.json()
-
-        for item in data.get("WaarnemingenLijst", []):
-            for m in item.get("MetingenLijst", []):
-                v = m.get("Meetwaarde", {}).get("Waarde_Numeriek")
-                if v is not None:
-                    return float(v)
-
-    except Exception:
-        return None
+    st.subheader("DEBUG INFO")
+    st.write("Status:", r.status_code)
+    st.write("Response keys:", list(r.json().keys()) if r.headers.get("content-type") else "NO JSON")
+    st.text(r.text[:3000])
 
     return None
+
+debug_fetch("WINDSNELHEID")
 
 
 # =========================
