@@ -2,8 +2,12 @@ import requests
 import json
 from datetime import datetime, timedelta, timezone
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
 import pandas as pd
+import time
+
+# auto-refresh every 60 seconds
+time.sleep(60)
+st.rerun()
 
 # =========================
 # CONFIG
