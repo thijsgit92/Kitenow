@@ -9,6 +9,17 @@ import time
 time.sleep(60)
 st.rerun()
 
+st.title("🏄 KiteNow is running")
+st.write("If you see this, the app is alive")
+
+if "last_refresh" not in st.session_state:
+    st.session_state.last_refresh = 0
+
+st.session_state.last_refresh += 1
+
+if st.session_state.last_refresh % 60 == 0:
+    st.rerun()
+
 # =========================
 # CONFIG
 # =========================
