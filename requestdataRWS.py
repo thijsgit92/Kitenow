@@ -1,8 +1,9 @@
 import streamlit as st
-from meteostat import Point, Hourly
-from datetime import datetime, timedelta, timezone
 import pandas as pd
+from datetime import datetime, timedelta, timezone
 
+from meteostat import Point
+from meteostat.hourly import Hourly
 # =========================
 # CONFIG
 # =========================
