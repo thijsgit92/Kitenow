@@ -1,44 +1,43 @@
 import streamlit as st
-import pandas as pd
-from datetime import datetime, timedelta, timezone
+import requests
+from datetime import datetime
 
-from meteostat import Point, Hourly
 # =========================
 # CONFIG
 # =========================
 
 st.set_page_config(page_title="KiteNow - Hoek van Holland", layout="centered")
 
-# Hoek van Holland coordinates
-LOCATION = Point(52.01, 4.12)
+LAT = 52.01
+LON = 4.12
 
 # =========================
-# KNMI / METEOSTAT DATA
+# FETCH WIND DATA (OPEN-METEO)
 # =========================
 
-def get_wind_data():
-    start = datetime.now(timezone.utc) - timedelta(hours=2)
-    end = datetime.now(timezone.utc)
+def get_wind():
+    url = (
+        "https://api.open-meteo.com/v1/forecast"
+        f"?latitude={LAT}"
+        f"&longitude={LON}"
+        "&hourly=windspeed_10m,winddirection_10m"
+        "&forecast_days=1"
+        "&timezone=UTC"
+    )
 
-    data = Hourly(LOCATION, start, end)
-    df = data.fetch()
+    try:
+        r = requests.get(url, timeout=10)
+        data = r.json()
 
-    if df.empty:
-        return None, None, None
+        speed_kmh = data["hourly"]["windspeed_10m"][0]
+        direction = data["hourly"]["winddirection_10m"][0]
 
-    # Meteostat:
-    # wspd = wind speed (km/h)
-    # wdir = wind direction (degrees)
-    # gust = wind gust (km/h)
+        speed_ms = speed_kmh / 3.6 if speed_kmh is not None else None
 
-    wind_speed_kmh = df["wspd"].iloc[-1]
-    wind_dir = df["wdir"].iloc[-1]
-    gust_kmh = df["wpgt"].iloc[-1] if "wpgt" in df.columns else None
+        return speed_ms, direction
 
-    wind_speed_ms = wind_speed_kmh / 3.6 if wind_speed_kmh else None
-    gust_ms = gust_kmh / 3.6 if gust_kmh else None
-
-    return wind_speed_ms, wind_dir, gust_ms
+    except Exception:
+        return None, None
 
 
 # =========================
@@ -65,7 +64,6 @@ def kite_score(speed, direction):
 
     score = 0
 
-    # wind strength
     if 6 <= speed <= 14:
         score += 6
     elif speed > 14:
@@ -73,7 +71,6 @@ def kite_score(speed, direction):
     else:
         score += 1
 
-    # direction
     if (0 <= direction <= 50) or (230 <= direction <= 359):
         score += 4
     else:
@@ -83,24 +80,20 @@ def kite_score(speed, direction):
 
 
 # =========================
-# UI HEADER
+# UI
 # =========================
 
 st.title("🏄 KiteNow – Hoek van Holland")
+st.caption("Live wind data (Open-Meteo) – stable & cloud-safe")
 
-st.caption("Live KNMI-backed wind data (via Meteostat)")
-
-# =========================
-# FETCH DATA
-# =========================
-
-speed, direction, gust = get_wind_data()
+# Fetch data
+speed, direction = get_wind()
 
 status = kite_status(speed, direction)
 score = kite_score(speed, direction)
 
 # =========================
-# BIG CENTER DISPLAY
+# MAIN DISPLAY (BIG CENTER)
 # =========================
 
 st.markdown(
@@ -118,32 +111,20 @@ st.markdown(
 # METRICS
 # =========================
 
-col1, col2, col3 = st.columns(3)
+col1, col2 = st.columns(2)
 
-col1.metric("Wind (m/s)", f"{speed:.1f}" if speed else "N/A")
-col2.metric("Gust (m/s)", f"{gust:.1f}" if gust else "N/A")
-col3.metric("Kite score", score)
-
-# =========================
-# SIMPLE HISTORY (SESSION ONLY)
-# =========================
-
-if "history" not in st.session_state:
-    st.session_state.history = []
-
-st.session_state.history.append({
-    "time": datetime.now().strftime("%H:%M"),
-    "speed": speed,
-    "direction": direction
-})
-
-df = pd.DataFrame(st.session_state.history)
-
-st.subheader("📈 Live trend (session)")
-st.line_chart(df.set_index("time")["speed"])
+col1.metric("Wind speed (m/s)", f"{speed:.1f}" if speed else "N/A")
+col2.metric("Kite score", score)
 
 # =========================
-# REFRESH BUTTON
+# TIMESTAMP
 # =========================
 
-st.button("🔄 Refresh")
+st.caption(f"Last update: {datetime.utcnow().strftime('%H:%M:%S UTC')}")
+
+# =========================
+# MANUAL REFRESH
+# =========================
+
+if st.button("🔄 Refresh"):
+    st.rerun()
