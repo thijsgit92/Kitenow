@@ -18,20 +18,27 @@ placeholder = st.empty()
 
 def debug_fetch(code):
     payload = {
-        "Locatie": {"Code": STATION_CODE},
-        "AquoPlusWaarnemingMetadata": {
-            "AquoMetadata": {
-                "Grootheid": {"Code": code}
+        "Locatie": {
+            "X": 4.121,
+            "Y": 51.98
+        },
+        "AquoPlusWaarnemingMetadata": [
+            {
+                "AquoMetadata": {
+                    "Grootheid": {
+                        "Code": code
+                    }
+                }
             }
-        }
+        ]
     }
 
     r = requests.post(API_URL, json=payload, timeout=10)
 
-    st.subheader("DEBUG INFO")
-    st.write("Status:", r.status_code)
-    st.write("Response keys:", list(r.json().keys()) if r.headers.get("content-type") else "NO JSON")
-    st.text(r.text[:3000])
+    st.write("STATUS:", r.status_code)
+
+    st.write("RAW RESPONSE (first 1500 chars):")
+    st.code(r.text[:1500])
 
     return None
 
