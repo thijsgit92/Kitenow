@@ -1,12 +1,15 @@
 import streamlit as st
 import requests
-from datetime import datetime
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
 
 # =========================
 # CONFIG
 # =========================
 
-st.set_page_config(page_title="Kite Intelligence - Noorderpier", layout="centered")
+st.set_page_config(page_title="Kite Intelligence Pro", layout="wide")
 
 LAT = 52.01
 LON = 4.12
@@ -15,12 +18,12 @@ LON = 4.12
 # CONVERSIONS
 # =========================
 
-def kmh_to_knots(kmh):
-    return kmh * 0.539957
+def kmh_to_knots(x):
+    return x * 0.539957
 
 
 # =========================
-# FETCH FORECAST
+# WIND DATA
 # =========================
 
 def get_forecast():
@@ -29,188 +32,209 @@ def get_forecast():
         f"?latitude={LAT}"
         f"&longitude={LON}"
         "&hourly=windspeed_10m,winddirection_10m,windgusts_10m"
-        "&forecast_days=1"
+        "&forecast_days=7"
         "&timezone=UTC"
     )
 
     r = requests.get(url, timeout=10)
-    data = r.json()
-
-    return data["hourly"]
+    return r.json()["hourly"]
 
 
 # =========================
-# GUST FACTOR
+# TIDE (FALLBACK MODEL)
 # =========================
 
-def gust_factor(speed, gust):
-    if speed == 0 or speed is None:
-        return 0
-    return gust / speed
+def tide_cycle(hour):
+    # simple harmonic tide approximation
+    # 12h cycle high/low
+    return np.sin((hour / 12) * np.pi)
 
 
-def gust_label(gf):
-    if gf < 1.2:
-        return "🟢 Clean"
-    elif gf < 1.5:
-        return "🟠 Gusty"
-    return "🔴 Dangerous"
-
-
-# =========================
-# SIMPLE "TIDE PROXY"
-# (Noorderpier weighting)
-# =========================
-
-def tide_score(hour_index):
-    # rough heuristic:
-    # morning + late afternoon = better flow near Noordpier
-    if 6 <= hour_index <= 10:
-        return 2
-    elif 16 <= hour_index <= 20:
-        return 2
-    return 1
+def tide_label(value):
+    if value > 0.6:
+        return "🌊 High tide"
+    elif value < -0.6:
+        return "🌊 Low tide"
+    return "🌊 Mid tide"
 
 
 # =========================
-# BEST 2-HOUR WINDOW
+# KITE SCORE MODEL
 # =========================
 
-def best_window(hourly):
-    speeds = hourly["windspeed_10m"]
-    gusts = hourly["windgusts_10m"]
+def kite_score(speed, gust, direction, tide):
+    score = 0
 
-    best_score = -999
-    best_start = 0
+    # wind strength
+    if 12 <= speed <= 25:
+        score += 5
+    elif speed > 25:
+        score += 3
+    else:
+        score += 1
 
-    for i in range(len(speeds) - 2):
+    # gust stability
+    gf = gust / speed if speed > 0 else 10
+    if gf < 1.3:
+        score += 4
+    elif gf < 1.6:
+        score += 2
+    else:
+        score -= 2
 
-        s1 = kmh_to_knots(speeds[i])
-        s2 = kmh_to_knots(speeds[i + 1])
+    # tide bonus (Noorderpier effect)
+    if abs(tide) > 0.6:
+        score += 2
 
-        g1 = kmh_to_knots(gusts[i])
-        g2 = kmh_to_knots(gusts[i + 1])
+    # direction (simple west coast logic)
+    if 200 <= direction <= 320:
+        score += 2
 
-        avg_speed = (s1 + s2) / 2
-        avg_gust = (g1 + g2) / 2
-
-        gf = gust_factor(avg_speed, avg_gust)
-
-        score = 0
-
-        # wind quality
-        if 12 <= avg_speed <= 25:
-            score += 5
-        elif avg_speed > 25:
-            score += 3
-        else:
-            score += 1
-
-        # stability
-        if gf < 1.3:
-            score += 4
-        elif gf < 1.6:
-            score += 2
-        else:
-            score -= 2
-
-        # tide proxy
-        score += tide_score(i)
-
-        if score > best_score:
-            best_score = score
-            best_start = i
-
-    return best_start, best_score
+    return max(0, min(10, score))
 
 
 # =========================
-# WIND TREND
-# =========================
-
-def trend(values):
-    v = values[:5]
-    if v[-1] > v[0] + 2:
-        return "📈 Building"
-    elif v[-1] < v[0] - 2:
-        return "📉 Dropping"
-    return "➡ Stable"
-
-
-# =========================
-# DATA
+# FETCH DATA
 # =========================
 
 hourly = get_forecast()
 
 wind = hourly["windspeed_10m"]
-dir = hourly["winddirection_10m"]
 gust = hourly["windgusts_10m"]
+dir = hourly["winddirection_10m"]
 time = hourly["time"]
-
-# CURRENT (knots)
-current_speed = kmh_to_knots(wind[0])
-current_gust = kmh_to_knots(gust[0])
-current_dir = dir[0]
-
-gf = gust_factor(current_speed, current_gust)
-
-t = trend([kmh_to_knots(x) for x in wind])
-
-best_start, best_score = best_window(hourly)
-
-# =========================
-# UI
-# =========================
-
-st.title("🏄 Kite Intelligence – Noorderpier")
-st.caption("Wind + gust + tide proxy + session optimizer")
 
 # =========================
 # CURRENT CONDITIONS
 # =========================
 
-st.markdown(
-    f"""
-    <div style="text-align:center;">
-        <h1>💨 {current_speed:.1f} kn</h1>
-        <h2>🧭 {current_dir:.0f}°</h2>
-        <h3>🌬 Gust: {current_gust:.1f} kn</h3>
-        <h3>{gust_label(gf)} (GF {gf:.2f})</h3>
-        <h3>{t}</h3>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+now_speed = kmh_to_knots(wind[0])
+now_gust = kmh_to_knots(gust[0])
+now_dir = dir[0]
+
+now_tide = tide_cycle(0)
+now_score = kite_score(now_speed, now_gust, now_dir, now_tide)
 
 # =========================
-# BEST WINDOW OUTPUT
+# WEEK SCORE SERIES
 # =========================
 
-start_time = time[best_start]
-end_time = time[best_start + 2]
+scores = []
+tides = []
 
-st.subheader("🌊 Best 2-hour kite window (Noorderpier optimized)")
+for i in range(len(wind)):
+    s = kmh_to_knots(wind[i])
+    g = kmh_to_knots(gust[i])
+    d = dir[i]
+    t = tide_cycle(i)
 
-st.success(f"""
-🟢 BEST WINDOW:  
-{start_time} → {end_time}  
+    scores.append(kite_score(s, g, d, t))
+    tides.append(t)
 
-🔥 Score: {best_score:.1f}
-""")
+
+df = pd.DataFrame({
+    "time": time,
+    "score": scores,
+    "wind": [kmh_to_knots(x) for x in wind],
+})
+
 
 # =========================
-# SAFETY INSIGHT
+# BEST WINDOW
 # =========================
 
-if gf > 1.6:
-    st.error("⚠️ Very gusty — risky conditions")
-elif current_speed > 18 and gf < 1.3:
-    st.success("🔥 PERFECT KITE CONDITIONS NOW")
-elif current_speed < 10:
-    st.info("🌤 Underpowered — wait for wind")
-else:
-    st.warning("🟡 Rideable but not optimal")
+best_i = int(np.argmax(scores))
+best_time = time[best_i]
+
+# =========================
+# UI
+# =========================
+
+st.title("🏄 Kite Intelligence Pro – Noorderpier")
+
+col1, col2, col3 = st.columns(3)
+
+col1.metric("Wind", f"{now_speed:.1f} kn")
+col2.metric("Gust", f"{now_gust:.1f} kn")
+col3.metric("Kite score", now_score)
+
+st.subheader("🌊 Tide state")
+st.success(tide_label(now_tide))
+
+st.subheader("🔥 Best moment this week")
+st.success(f"Peak kite time: {best_time} (score {scores[best_i]:.1f})")
+
+# =========================
+# SCORE TIMELINE
+# =========================
+
+st.subheader("📈 Weekly kite score timeline")
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(
+    x=df["time"],
+    y=df["score"],
+    mode="lines",
+    name="Kite score"
+))
+
+fig.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10))
+
+st.plotly_chart(fig, use_container_width=True)
+
+
+# =========================
+# WIND FIELD MAP (SIMPLE GRID)
+# =========================
+
+st.subheader("🗺️ Wind field (local area)")
+
+grid_lats = np.linspace(51.95, 52.10, 6)
+grid_lons = np.linspace(4.0, 4.25, 6)
+
+lats, lons, u, v = [], [], [], []
+
+for la in grid_lats:
+    for lo in grid_lons:
+        url = (
+            "https://api.open-meteo.com/v1/forecast"
+            f"?latitude={la}"
+            f"&longitude={lo}"
+            "&hourly=windspeed_10m,winddirection_10m"
+            "&forecast_days=1"
+        )
+
+        r = requests.get(url)
+        data = r.json()["hourly"]
+
+        speed = kmh_to_knots(data["windspeed_10m"][0])
+        direction = data["winddirection_10m"][0]
+
+        rad = np.radians(direction)
+
+        u.append(speed * np.sin(rad))
+        v.append(speed * np.cos(rad))
+
+        lats.append(la)
+        lons.append(lo)
+
+
+fig2 = go.Figure()
+
+fig2.add_trace(go.Cone(
+    x=lons,
+    y=lats,
+    u=u,
+    v=v,
+    sizemode="absolute",
+    sizeref=0.3,
+    anchor="tail"
+))
+
+fig2.update_layout(height=500)
+
+st.plotly_chart(fig2, use_container_width=True)
+
 
 # =========================
 # REFRESH
